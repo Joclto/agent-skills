@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.0.0
+version: 1.1.0
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
@@ -71,3 +71,8 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
 4. **Coding Plan 的 GLM key 必须带 `/api/coding/` 路径**，标准路径报 1113。
 5. **导入前先建库**：transfer/import 的 URL bank 必须已存在（先 retain 一条种子）。
 6. **防火墙**：8888/9999 入站规则按端口生效，对 Docker 发布端口同样有效，限 Tailscale 网段即可。
+7. **整合队列停滞（思考模型 × 默认超时）**：`/health` 全绿但 pending 不动、日志刷
+   `Connection error (HTTP None)`——GLM 强制思考默认 max 档，重的整合调用超过 120s
+   单次尝试上限。两条路：降 `HINDSIGHT_API_CONSOLIDATION_LLM_REASONING_EFFORT`，
+   或保 max 放宽 `HINDSIGHT_API_CONSOLIDATION_LLM_TIMEOUT`（实测 300s 兜住、240s 不够）；
+   failed 项不会自动重试，需 SQL 重排。详见 deploy-guide 第七节。

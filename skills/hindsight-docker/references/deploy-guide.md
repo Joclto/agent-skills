@@ -104,3 +104,59 @@ Docker 发布端口走宿主端口规则，同规则对容器映射生效。
 数据都在 named volume（`pg_data`/`hf_cache`），`docker compose down` 不删卷；
 换回旧版本：`image: ghcr.io/vectorize-io/hindsight:<旧tag>` 再 `up -d`。
 彻底重来：`docker compose down -v`（**会删数据，先导 transfer.zip**）。
+
+## 七、整合队列停滞：GLM 思考模型 × 超时（实测定档 300s）
+
+**症状**：`/health` 全绿、嵌入调用秒回，但 `pending_consolidation` 小时级不动，
+日志持续刷 `Connection error (HTTP None), attempt N`。根因：GLM-5.3 系**强制思考不能关**
+（`thinking.type=disabled` 被端点静默降为 ≈low、`enable_thinking=false` 直接 400/1210、
+`reasoning_effort` 只有 low/high/max 且默认 **max**），而整合单次尝试硬超时默认 120s——
+max 档重的整合调用 160–350s，约半数死在超时上，重试梯子（4 次尝试 × 3 轮外层）再放大。
+
+**两条修复路线**（按质量取舍，二选一）：
+
+1. **降思考档**：compose 加 `HINDSIGHT_API_CONSOLIDATION_LLM_REASONING_EFFORT: "low"`
+   （重的整合调用约 20× 提速；质量有损风险需自测对比，retain 提取建议保持默认）。
+2. **保 max 档、放宽整合超时**（本库实测裁决，质量优先）：
+
+**实测定档**（生产同形探针：真实待整合事实、k=1/2/4/8 条/批、无 max_tokens、temperature 0、
+并发 2、共享观察池；21/21 HTTP 200 零 429）：
+
+| 单次耗时 | p50 | p90 | p95 | max |
+|---|---|---|---|---|
+| 秒 | 59 | 143 | 198 | 254.3 |
+
+思考 1k–14.9k token/次 @ ~60 tok/s（51–63）；k=8 批（prompt 至 2.8 万字符）是尾部，
+k≤4 从未超过 140s。换算：**240s 不够**（观测最大 254.3s 已越过它）；**300s** 需 >2 万
+思考 token 才触发（比观测最大高 37%）；360s 保守备选。
+
+compose 只加一行（**只动整合作用域**；retain/reflect 沿用全局 120s，不受影响）：
+
+```yaml
+    environment:
+      HINDSIGHT_API_CONSOLIDATION_LLM_TIMEOUT: "300"
+```
+
+`docker compose up -d` 重建生效，容器内读回验证：
+
+```powershell
+docker exec hindsight-app python -c "from hindsight_api.config import get_config; print(get_config().consolidation_llm_timeout)"
+# → 300.0
+```
+
+**失败项重排**：failed 行**永远不会自动重试**，也没有 HTTP 接口——根因修好后，用与引擎
+`requeue_failed_consolidation` 等价的 SQL（先数、再清、后验证）：
+
+```sql
+SELECT count(*) FROM memory_units
+ WHERE bank_id='hermes' AND consolidation_failed_at IS NOT NULL
+   AND fact_type IN ('experience','world');          -- 修复前先记数
+
+UPDATE memory_units SET consolidation_failed_at = NULL, consolidated_at = NULL
+ WHERE bank_id='hermes' AND consolidation_failed_at IS NOT NULL
+   AND fact_type IN ('experience','world');
+```
+
+**生效判据（看行为不看配置）**：`slow llm call`（scope=consolidation）行正常完成
+（实测 16.7k input 批整批过）、`Connection error` 归零、`llm_batch #N | processed=X/Y`
+持续推进、pending 小时级下降。
