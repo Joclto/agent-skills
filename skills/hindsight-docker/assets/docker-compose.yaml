@@ -60,6 +60,18 @@ services:
       HINDSIGHT_API_LLM_MODEL: glm-5.3-flash
       HINDSIGHT_API_LLM_BASE_URL: https://open.bigmodel.cn/api/coding/paas/v4
       HINDSIGHT_API_LLM_MAX_CONCURRENT: "2"
+      # Thinking models (GLM-5.x): consolidation at effort=max thinks MINUTES per call
+      # (a single dense-cluster fact measured 238s; one 8-fact batch 546s) — any finite
+      # per-attempt timeout kills legitimate long thinking. 24h = effectively unbounded;
+      # there is NO "unlimited" sentinel (unset or 0 falls back to 120s). Backstop = the
+      # 7200s idle wall clock. Keep effort pinned so an upstream default change can't
+      # silently lower quality. Details: references/deploy-guide.md section 7.
+      HINDSIGHT_API_CONSOLIDATION_LLM_TIMEOUT: "86400"
+      HINDSIGHT_API_CONSOLIDATION_LLM_REASONING_EFFORT: "max"
+      HINDSIGHT_API_CONSOLIDATION_LLM_BATCH_SIZE: "8"
+      # Stable worker id: the default is the container hostname, which changes on every
+      # recreate — ops left in 'processing' by a hard crash would never be recovered.
+      HINDSIGHT_API_WORKER_ID: hindsight-app
       # 数据库（vchord 容器内）
       HINDSIGHT_API_DATABASE_URL: postgresql://${HINDSIGHT_DB_USER:-hindsight_user}:${HINDSIGHT_DB_PASSWORD}@db:5432/${HINDSIGHT_DB_NAME:-hindsight_db}
       # 向量/文本扩展（vchord：解锁 >2000 维）
