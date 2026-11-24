@@ -252,12 +252,15 @@ UPDATE memory_units SET consolidation_failed_at = NULL, consolidated_at = NULL
 - 实测：此前在 120s 下重试耗尽而失败的两个分块（3012 / 10806 token），放开后重新投喂
   94s / 265s 完成。
 
-**失败分块补投**：failed 的 retain op 不会自动重试。从 `async_operations.task_payload`
-取出该分块正文，经 API 重新 POST（产生新的 op id 和文档 id，旧 failed 记录留着不影响）：
+**失败分块补投**：failed 的 retain op 不会自动重试。回灌脚本（v3）投的直接重跑同一条命令——
+`document_id` 固定，已入库的片是空操作（0 token），实际只提炼失败的那片。手工补投：从
+`async_operations.task_payload` 取出该分块正文**连同原 `document_id`** 重新 POST
+（新 op id，文档仍是原来那个；不带 id 或换新 id 都会重复入库，旧 failed 记录留着不影响）：
 
 ```python
 import requests
 requests.post("http://127.0.0.1:8888/v1/default/banks/hermes/memories",
-              json={"items": [{"content": content, "context": context, "tags": tags}],
+              json={"items": [{"content": content, "context": context, "tags": tags,
+                               "document_id": document_id}],
                     "async": True})
 ```

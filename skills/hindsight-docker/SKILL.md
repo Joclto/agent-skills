@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.3.2
+version: 1.4.0
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
@@ -45,8 +45,10 @@ metadata:
 
 - 裸机/旧库 → Docker：官方 transfer/export → import（merge），免费零 LLM token，
   全量记忆自动用新嵌入模型重嵌入。见 `references/migration-backfill.md`。
-- 多设备历史会话一次性回灌：`assets/feed_sessions.py` 在每台设备上运行一次，
+- 多设备历史会话一次性回灌：`assets/feed_sessions.py`（v3）在每台设备上运行一次，
   把该机 Hermes 的完整对话历史（state.db）投喂进中央库，服务端后台慢慢提炼。
+  每片带固定 `document_id`，重跑零新增；**已在实时镜像的机器必须加 `--before`
+  <接入时刻，精确到分>**，否则接入之后的会话镜像、回灌各进一份。
 
 ## 运维速查
 
@@ -88,7 +90,12 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
    长文档单次思考超时后空烧重试梯子，重试耗尽**整篇不落库**（回灌 13 个会话丢了 2 个）。
    同样无哨兵：`HINDSIGHT_API_RETAIN_LLM_TIMEOUT: "86400"`；单篇实际封顶是 retain 墙钟
    `HINDSIGHT_API_RETAIN_WALL_TIMEOUT`（默认 3600s，不随进度延长），留作防卡死兜底。
-   failed 的 retain 不会自动重试，取回 payload 经 API 重新 POST。详见 deploy-guide 第八节。
+   failed 的 retain 不会自动重试：回灌脚本直接重跑（固定 id，已入库的片是空操作），手工补投
+   必须沿用原 `document_id`。详见 deploy-guide 第八节。
 10. **后台看不出记忆来自哪台机器**：Control Plane 的列表/详情没有来源列，写入时也不传主机名。
     只有库里的 `memory_units.metadata->>'user_id'`（Hermes 桌面端 = `sid:<Windows 账户 SID>`）
     能区分设备，须查库。见 deploy-guide 第四节「来源设备」。
+11. **回灌去重只在同一个 `document_id` 内**（块 `content_hash`，只含正文）：同一段正文不带 id
+    或换个 id 再投就是第二份（临时库实测 +41 单元，文档 1→2），整合层 0.97 的语义去重只是兜底。
+    回灌必须带稳定 id，同一台机器不与 v2 混跑；去重类结论一律在临时库里验证
+    （`assert BANK != 'hermes'`，跑完删库）。见 `references/migration-backfill.md` §B。
