@@ -101,7 +101,7 @@ Docker 发布端口走宿主端口规则，同规则对容器映射生效。
 `com.docker.backend.exe` 的入站放行规则（任意地址，Private/Public 配置文件），它管的是
 转发进程而不是端口，会架空上面两条端口规则——非组网来源（实测：WSL 虚拟网段）同样能访问
 8888，而 API 没有鉴权。要真正收紧，显式阻断组网网段以外的来源（Block 规则优先于 Allow）。
-下面两条语法已过 `-WhatIf` 校验、**生效性尚未实测**，加完必须做三向验证：
+下面两条已在中央主机实机落地并验证（2026-11-24），在其它机器上加完同样必须做三向验证：
 
 ```powershell
 # 管理员：8888/9999 拒绝来自组网网段以外的所有地址（IPv4 两段 + IPv6 全量）
@@ -113,6 +113,11 @@ New-NetFirewallRule -DisplayName "Hindsight UI (block non-overlay)" -Direction I
 三向验证：本机 `curl http://127.0.0.1:8888/health` 仍 healthy（回环不受防火墙管）、
 组网设备仍可访问、非组网来源连接超时。任一项不符就 `Remove-NetFirewallRule -DisplayName
 "Hindsight*block non-overlay*"` 回退。
+
+实测记录（中央主机，2026-11-24）：回环 200；同一 WSL 来源对 8888/9999 超时，而对宿主 7680 端口
+（有监听且被放行）秒回——路径本身是通的，丢包来自 Block 规则。**别拿无监听端口当对照**：
+Windows 防火墙隐身模式对没人监听的端口同样超时。组网对端方向当时只做了规则读回
+（Block 排除 `100.64.0.0/10`、Allow 覆盖该段），未抓到端到端连接，仍以三向验证为准。
 
 ## 六、日常运维
 

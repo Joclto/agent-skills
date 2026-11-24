@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.3.0
+version: 1.3.1
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
@@ -73,8 +73,8 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
 6. **防火墙**：8888/9999 入站规则按端口生效，对 Docker 发布端口同样有效，限组网网段
    （xEdge `100.64.0.0/10`）即可。但「仅组网可达」在 Docker Desktop 下**不自动成立**：
    Docker Desktop 自带 `com.docker.backend.exe` 的任意地址入站放行规则会架空它——实测
-   非组网来源（WSL 网段）也能访问 8888，而 API 无鉴权。要收紧须另加 Block 规则，
-   见 deploy-guide 第五节。
+   非组网来源（WSL 网段）也能访问 8888，而 API 无鉴权。要收紧须另加 Block 规则
+   （已在中央主机落地验证：回环正常、WSL 来源超时），见 deploy-guide 第五节。
 7. **整合队列停滞（思考模型 × 单次超时）**：`/health` 全绿但 pending 不动、日志刷
    `Connection error (HTTP None)`——GLM 强制思考默认 max 档，重的整合调用超过 120s
    单次尝试上限。保 max 的终案是思考时间不设上限：
