@@ -116,8 +116,11 @@ New-NetFirewallRule -DisplayName "Hindsight UI (block non-overlay)" -Direction I
 
 实测记录（中央主机，2026-11-24）：回环 200；同一 WSL 来源对 8888/9999 超时，而对宿主 7680 端口
 （有监听且被放行）秒回——路径本身是通的，丢包来自 Block 规则。**别拿无监听端口当对照**：
-Windows 防火墙隐身模式对没人监听的端口同样超时。组网对端方向当时只做了规则读回
-（Block 排除 `100.64.0.0/10`、Allow 覆盖该段），未抓到端到端连接，仍以三向验证为准。
+Windows 防火墙隐身模式对没人监听的端口同样超时。组网方向随后在另一台成员机上实测通过
+（`curl http://<host xEdge IP>:8888/health` 返回 healthy），主机侧 TCP 表也观察到成员机到 9999
+的实连（`Get-NetTCPConnection -LocalPort 8888,9999` 里来源为 `100.x`、状态 Established）——三向
+全部成立，规则保留。一次性请求不会在主机侧留下 TCP 痕迹（先关连接的是客户端），要在对端
+执行的那一刻轮询才抓得到。
 
 ## 六、日常运维
 
