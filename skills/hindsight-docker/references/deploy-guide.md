@@ -8,7 +8,7 @@
 1. **Docker Desktop**（WSL2 后端）已安装并运行
 2. 一个 LLM API key（提取用；国内智谱 Coding Plan 走 `https://open.bigmodel.cn/api/coding/paas/v4`，
    key 必须带 `/api/coding/` 路径）
-3. Tailscale（可选，多设备远程接入时）
+3. 内网组网（可选，多设备远程接入时；下文以 xEdge 为例，其网段为 `100.64.0.0/10`）
 
 ## 一、目录与配置
 
@@ -76,16 +76,43 @@ docker exec hindsight-db psql -U hindsight_user -d hindsight_db -c "SELECT creat
 1. 中央机 retain 一条种子自动建库（bank_id 例 `hermes`）：
    `POST /v1/default/banks/hermes/memories` body `{"items":[{"content":"种子"}]}`
 2. 各设备 Hermes：设置 → 插件 → 安装 hindsight → Memory 提供商选 local_external →
-   API 填 `http://<中央机Tailscale IP>:8888`，bank 填 `hermes`，无需 key。
+   API 填 `http://<host xEdge IP>:8888`，bank 填 `hermes`，无需 key。
+
+**来源设备**：Control Plane 的列表和详情都没有「来源机器」一栏（写入时不传主机名），
+要知道某条记忆来自哪台设备只能查库——`memory_units.metadata->>'user_id'`（Hermes 桌面端
+写入的是 `sid:<Windows 账户 SID>`，每台 Windows 安装不同），会话 id 见
+`metadata->>'session_id'` 或标签 `session:<id>`：
+
+```sql
+SELECT metadata->>'user_id' AS device, count(*) FROM memory_units
+WHERE bank_id='hermes' GROUP BY 1;
+```
 
 ## 五、防火墙（远程可达性）
 
 ```powershell
-# 管理员：8888/9999 仅放行 Tailscale 网段（100.64.0.0/10）
-New-NetFirewallRule -DisplayName "Hindsight API (TS only)" -Direction Inbound -Protocol TCP -LocalPort 8888 -RemoteAddress 100.64.0.0/10 -Action Allow
-New-NetFirewallRule -DisplayName "Hindsight UI (TS only)" -Direction Inbound -Protocol TCP -LocalPort 9999 -RemoteAddress 100.64.0.0/10 -Action Allow
+# 管理员：8888/9999 仅放行组网网段（xEdge：100.64.0.0/10）
+New-NetFirewallRule -DisplayName "Hindsight API (xEdge only)" -Direction Inbound -Protocol TCP -LocalPort 8888 -RemoteAddress 100.64.0.0/10 -Action Allow
+New-NetFirewallRule -DisplayName "Hindsight UI (xEdge only)" -Direction Inbound -Protocol TCP -LocalPort 9999 -RemoteAddress 100.64.0.0/10 -Action Allow
 ```
 Docker 发布端口走宿主端口规则，同规则对容器映射生效。
+
+**Docker Desktop 下「仅组网可达」并不自动成立**（实测）：Docker Desktop 自带一条
+`com.docker.backend.exe` 的入站放行规则（任意地址，Private/Public 配置文件），它管的是
+转发进程而不是端口，会架空上面两条端口规则——非组网来源（实测：WSL 虚拟网段）同样能访问
+8888，而 API 没有鉴权。要真正收紧，显式阻断组网网段以外的来源（Block 规则优先于 Allow）。
+下面两条语法已过 `-WhatIf` 校验、**生效性尚未实测**，加完必须做三向验证：
+
+```powershell
+# 管理员：8888/9999 拒绝来自组网网段以外的所有地址（IPv4 两段 + IPv6 全量）
+$deny = "0.0.0.0-100.63.255.255","100.128.0.0-255.255.255.255","::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+New-NetFirewallRule -DisplayName "Hindsight API (block non-overlay)" -Direction Inbound -Action Block -Protocol TCP -LocalPort 8888 -RemoteAddress $deny
+New-NetFirewallRule -DisplayName "Hindsight UI (block non-overlay)" -Direction Inbound -Action Block -Protocol TCP -LocalPort 9999 -RemoteAddress $deny
+```
+
+三向验证：本机 `curl http://127.0.0.1:8888/health` 仍 healthy（回环不受防火墙管）、
+组网设备仍可访问、非组网来源连接超时。任一项不符就 `Remove-NetFirewallRule -DisplayName
+"Hindsight*block non-overlay*"` 回退。
 
 ## 六、日常运维
 
@@ -181,8 +208,8 @@ asyncio.run(main())
 - **改批大小/超时后要开新轮**：参数在整合轮次入口读取，处理中的 op 续跑旧形状的批。取消用
   `DELETE /v1/default/banks/<bank>/operations/<op_id>`（协作式：行立即标 cancelled，worker 在
   下一检查点停；带 `/delete` 后缀的路由只收终态 op），poller 随后自动以新参数建新 op。
-- **retain/reflect 未动**：仍沿用全局 `HINDSIGHT_API_LLM_TIMEOUT`（120s）；retain 侧若出现
-  `retain_extract_facts` 超时告警属另一问题，单独立案。
+- **retain 同理**：默认也沿用全局 120s，长文档写入会整篇失败——同样放开，见第八节；
+  reflect 仍用默认值。
 
 **失败项重排**：failed 行**永远不会自动重试**，也没有 HTTP 接口——根因修好后，用与引擎
 `requeue_failed_consolidation` 等价的 SQL（先数、再清、后验证）：
@@ -195,4 +222,34 @@ SELECT count(*) FROM memory_units
 UPDATE memory_units SET consolidation_failed_at = NULL, consolidated_at = NULL
  WHERE bank_id='hermes' AND consolidation_failed_at IS NOT NULL
    AND fact_type IN ('experience','world');
+```
+
+## 八、retain 超时：长文档写入整篇失败（同样放开）
+
+**症状**：回灌历史会话时个别分块最终 `failed`，错误
+`Task exceeded the 3600s wall-clock limit for 'batch_retain'`，此前日志里零星
+`retain_extract_facts` 超时告警。根因同第七节：retain 提炼走同一个强制思考的 GLM，而 retain
+默认沿用全局 `HINDSIGHT_API_LLM_TIMEOUT`（120s）——长文档单次思考超时后空烧重试梯子，
+重试耗尽、3600s 墙钟到期，**整篇不落库**。
+
+**修复**：compose 的 `environment` 再加一行（同样无哨兵，删键/填 0 都回退 120s）：
+
+```yaml
+      HINDSIGHT_API_RETAIN_LLM_TIMEOUT: "86400"
+```
+
+- 单篇实际封顶是 retain 墙钟 `HINDSIGHT_API_RETAIN_WALL_TIMEOUT`（默认 3600s，**不随进度延长**，
+  这点与整合的 7200s 不同），留作防卡死兜底，不要关。
+- `docker compose up -d` 重建后读回：`get_config().retain_llm_timeout` → `86400.0`。
+- 实测：此前在 120s 下重试耗尽而失败的两个分块（3012 / 10806 token），放开后重新投喂
+  94s / 265s 完成。
+
+**失败分块补投**：failed 的 retain op 不会自动重试。从 `async_operations.task_payload`
+取出该分块正文，经 API 重新 POST（产生新的 op id 和文档 id，旧 failed 记录留着不影响）：
+
+```python
+import requests
+requests.post("http://127.0.0.1:8888/v1/default/banks/hermes/memories",
+              json={"items": [{"content": content, "context": context, "tags": tags}],
+                    "async": True})
 ```

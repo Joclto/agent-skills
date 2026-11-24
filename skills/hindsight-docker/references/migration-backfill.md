@@ -35,7 +35,7 @@ retain 的摘要多得多，等于给记忆库补全"过程记忆"。
 在每台设备上运行一次：
 
 ```powershell
-python feed_sessions.py http://<中央机Tailscale IP>:8888
+python feed_sessions.py http://<host xEdge IP>:8888
 ```
 
 - 投喂模式 `async=true`：立即入队，服务端后台慢慢提炼（GLM 提取 + 嵌入），

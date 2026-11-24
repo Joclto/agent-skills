@@ -72,6 +72,11 @@ services:
       # Stable worker id: the default is the container hostname, which changes on every
       # recreate — ops left in 'processing' by a hard crash would never be recovered.
       HINDSIGHT_API_WORKER_ID: hindsight-app
+      # Retain (write-time extraction) hits the same forced-thinking timeout: a long document
+      # burns the retry ladder against the 120s global default and then fails whole. Same
+      # semantics (no "unlimited" sentinel). The retain wall clock (3600s, NOT extended on
+      # progress) stays as the anti-hang ceiling. Details: references/deploy-guide.md section 8.
+      HINDSIGHT_API_RETAIN_LLM_TIMEOUT: "86400"
       # 数据库（vchord 容器内）
       HINDSIGHT_API_DATABASE_URL: postgresql://${HINDSIGHT_DB_USER:-hindsight_user}:${HINDSIGHT_DB_PASSWORD}@db:5432/${HINDSIGHT_DB_NAME:-hindsight_db}
       # 向量/文本扩展（vchord：解锁 >2000 维）

@@ -1,20 +1,20 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.2.0
+version: 1.3.0
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
 metadata:
   hermes:
-    tags: [hindsight, memory, docker, vchord, embedding, tailscale]
+    tags: [hindsight, memory, docker, vchord, embedding, xedge, overlay-network]
     category: productivity
 ---
 
 # Hindsight 中央记忆库 · Docker Desktop 部署与运维
 
 一台 Windows 主机常驻 Hindsight（API 8888 + 官方 Control Plane 9999 + vchord PostgreSQL），
-多台设备的 Hermes 通过 Tailscale 指向同一记忆库，共享一个 bank。
+多台设备的 Hermes 经内网组网（xEdge，网段 100.64.0.0/10）指向同一记忆库，共享一个 bank。
 
 ## 适用场景
 
@@ -70,7 +70,11 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
    （settings-store.json: `ProxyHttpMode=manual` + `OverrideProxyHttp/Https`），ghcr 可直连。
 4. **Coding Plan 的 GLM key 必须带 `/api/coding/` 路径**，标准路径报 1113。
 5. **导入前先建库**：transfer/import 的 URL bank 必须已存在（先 retain 一条种子）。
-6. **防火墙**：8888/9999 入站规则按端口生效，对 Docker 发布端口同样有效，限 Tailscale 网段即可。
+6. **防火墙**：8888/9999 入站规则按端口生效，对 Docker 发布端口同样有效，限组网网段
+   （xEdge `100.64.0.0/10`）即可。但「仅组网可达」在 Docker Desktop 下**不自动成立**：
+   Docker Desktop 自带 `com.docker.backend.exe` 的任意地址入站放行规则会架空它——实测
+   非组网来源（WSL 网段）也能访问 8888，而 API 无鉴权。要收紧须另加 Block 规则，
+   见 deploy-guide 第五节。
 7. **整合队列停滞（思考模型 × 单次超时）**：`/health` 全绿但 pending 不动、日志刷
    `Connection error (HTTP None)`——GLM 强制思考默认 max 档，重的整合调用超过 120s
    单次尝试上限。保 max 的终案是思考时间不设上限：
@@ -80,3 +84,11 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
    缩批到 4 都兜不住。failed 项不会自动重试，需 SQL 重排。详见 deploy-guide 第七节。
 8. **固定 `HINDSIGHT_API_WORKER_ID`**：默认取容器 hostname、重建即变，硬崩溃/断电后
    遗留在 processing 的 op 永不回收，整合队列无声卡死（启动日志有同名告警）。
+9. **retain 也要放开超时**：retain 提炼默认沿用全局 `HINDSIGHT_API_LLM_TIMEOUT`（120s），
+   长文档单次思考超时后空烧重试梯子，重试耗尽**整篇不落库**（回灌 13 个会话丢了 2 个）。
+   同样无哨兵：`HINDSIGHT_API_RETAIN_LLM_TIMEOUT: "86400"`；单篇实际封顶是 retain 墙钟
+   `HINDSIGHT_API_RETAIN_WALL_TIMEOUT`（默认 3600s，不随进度延长），留作防卡死兜底。
+   failed 的 retain 不会自动重试，取回 payload 经 API 重新 POST。详见 deploy-guide 第八节。
+10. **后台看不出记忆来自哪台机器**：Control Plane 的列表/详情没有来源列，写入时也不传主机名。
+    只有库里的 `memory_units.metadata->>'user_id'`（Hermes 桌面端 = `sid:<Windows 账户 SID>`）
+    能区分设备，须查库。见 deploy-guide 第四节「来源设备」。

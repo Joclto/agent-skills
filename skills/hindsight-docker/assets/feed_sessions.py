@@ -2,7 +2,7 @@
 """
 feed_sessions.py v2 — 把本机 Hermes 完整会话历史(state.db)投喂给中央 Hindsight 记忆库
 用法（各设备均可，API 指向中央服务）:
-    python feed_sessions.py http://100.121.103.87:8888
+    python feed_sessions.py http://<host xEdge IP>:8888
 仅标准库；SQLite 以只读模式打开，Hermes 运行中也可安全执行。
 """
 import json
