@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.5.0
+version: 1.5.1
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]

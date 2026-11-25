@@ -256,8 +256,8 @@ UPDATE memory_units SET consolidation_failed_at = NULL, consolidated_at = NULL
 
 **回灌期间的墙钟（2026-11-26 改判）**：全局 LLM 并发 2（`HINDSIGHT_API_LLM_MAX_CONCURRENT`）
 由 retain、整理、反思共用，worker 槽位数不是 LLM 并行度——8 个 op 同时 `processing`，真正
-在发的请求只有 2 路。单片几万字符要发多次提炼调用，每次 7–8 分钟，调用之间排队 10–20 分钟，
-半小时到五十分钟才跑完一片；默认 3600s 墙钟从认领起算、不随进度延长，一次 181 片的回灌被
+在发的请求只有 2 路。单片要发多次提炼调用（实测平均 4 次、最多 7 次），而且是**一起发出**排队，不是发完一个再发下一个：
+单次调用单独跑只要 30–80 秒，排队后中位耗时 15–20 分钟；一片从认领到完成 20 分钟到 1.5 小时不等，吞吐约每小时 8–12 片；默认 3600s 墙钟从认领起算、不随进度延长，一次 181 片的回灌被
 它杀掉 33 片。修复 = compose 再加一行并重建容器（在跑的 op 自动回到 pending 重新认领，不丢
 数据；回灌结束后改回 3600，同样要重建）：
 
@@ -273,7 +273,7 @@ UPDATE memory_units SET consolidation_failed_at = NULL, consolidated_at = NULL
 是本地嵌入耗时，实测 2010s/47s、3001s/195s、2727s/130s（嵌入占 2–6%）；按 `llm_requests`
 的 scope 汇总，`retain_extract_facts` 约占 LLM 时间 98%，`embedding_document` 约 2%——换更
 快的嵌入模型没有意义。`llm_requests.started_at` 在排队等并发许可之前就落库（14 条请求同一个
-起始秒，而许可只有 2 个），拿它算并发会高估。日志里成片的 `APIStatusError ... HTTP 429
+起始秒，而许可只有 2 个），拿它算并发会高估；反过来，同一片的多次调用起始时间几乎相同（实测 45 片里 38 片的全部调用在 2 秒内发出）正说明它们都在排队。判据：独占许可时单次提炼调用只要 30–80 秒——慢的是排队，不是模型。日志里成片的 `APIStatusError ... HTTP 429
 {"code": "1302"}` 是排队中的首次尝试快速失败触发的供应商限流，默认退避（≤60s）后自动恢复，
 真正的代价是退避完还要重新排队；stage 显示 `...backoff` 或 `...structured.queued` 都是在
 排队，不是卡死。能提速的只有降提炼推理档位或调大全局并发，前者动质量、后者触发限流
