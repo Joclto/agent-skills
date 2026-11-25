@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.4.0
+version: 1.5.0
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
@@ -89,8 +89,13 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
 9. **retain 也要放开超时**：retain 提炼默认沿用全局 `HINDSIGHT_API_LLM_TIMEOUT`（120s），
    长文档单次思考超时后空烧重试梯子，重试耗尽**整篇不落库**（回灌 13 个会话丢了 2 个）。
    同样无哨兵：`HINDSIGHT_API_RETAIN_LLM_TIMEOUT: "86400"`；单篇实际封顶是 retain 墙钟
-   `HINDSIGHT_API_RETAIN_WALL_TIMEOUT`（默认 3600s，不随进度延长），留作防卡死兜底。
-   failed 的 retain 不会自动重试：回灌脚本直接重跑（固定 id，已入库的片是空操作），手工补投
+   `HINDSIGHT_API_RETAIN_WALL_TIMEOUT`（默认 3600s，**不随进度延长**，从认领起算）是防卡死兜底，但大批量回灌期间会误杀：
+   全局 LLM 并发只有 2 且与整理共用，单片光排队就超过一小时（实测一次 181 片死 33 片），
+   回灌期一并设为 `"86400"`（重建容器才生效，在跑的 op 自动回到 pending 再认领；回灌结束后
+   改回）。慢在 LLM 提炼而不是嵌入向量化（`[retain-timing]` 行里嵌入只占 2–6%）。
+   failed 的 retain 不会自动重试：优先用官方重试端点
+   `POST /v1/default/banks/<bank>/operations/<id>/retry` 从已提交分块续跑（不重复提炼），
+   回灌脚本直接重跑也行（固定 id，已入库的片是空操作），手工补投
    必须沿用原 `document_id`。详见 deploy-guide 第八节。
 10. **后台看不出记忆来自哪台机器**：Control Plane 的列表/详情没有来源列，写入时也不传主机名。
     只有库里的 `memory_units.metadata->>'user_id'`（Hermes 桌面端 = `sid:<Windows 账户 SID>`）

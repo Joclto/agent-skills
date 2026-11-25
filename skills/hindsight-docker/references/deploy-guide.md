@@ -247,12 +247,42 @@ UPDATE memory_units SET consolidation_failed_at = NULL, consolidated_at = NULL
 ```
 
 - 单篇实际封顶是 retain 墙钟 `HINDSIGHT_API_RETAIN_WALL_TIMEOUT`（默认 3600s，**不随进度延长**，
-  这点与整合的 7200s 不同），留作防卡死兜底，不要关。
+  这点与整合的 7200s 空闲上限不同），从认领起算。它是防卡死兜底：卡死的 op 否则永远占着
+  worker 槽位（保持 `processing`，既不能重试也不能取消）。小流量下留着即可，但大批量回灌
+  期间必须一并放开，见下文「回灌期间的墙钟」。
 - `docker compose up -d` 重建后读回：`get_config().retain_llm_timeout` → `86400.0`。
 - 实测：此前在 120s 下重试耗尽而失败的两个分块（3012 / 10806 token），放开后重新投喂
   94s / 265s 完成。
 
-**失败分块补投**：failed 的 retain op 不会自动重试。回灌脚本（v3）投的直接重跑同一条命令——
+**回灌期间的墙钟（2026-11-26 改判）**：全局 LLM 并发 2（`HINDSIGHT_API_LLM_MAX_CONCURRENT`）
+由 retain、整理、反思共用，worker 槽位数不是 LLM 并行度——8 个 op 同时 `processing`，真正
+在发的请求只有 2 路。单片几万字符要发多次提炼调用，每次 7–8 分钟，调用之间排队 10–20 分钟，
+半小时到五十分钟才跑完一片；默认 3600s 墙钟从认领起算、不随进度延长，一次 181 片的回灌被
+它杀掉 33 片。修复 = compose 再加一行并重建容器（在跑的 op 自动回到 pending 重新认领，不丢
+数据；回灌结束后改回 3600，同样要重建）：
+
+```yaml
+      HINDSIGHT_API_RETAIN_WALL_TIMEOUT: "86400"
+```
+
+重建后读回 `get_config().retain_wall_timeout` → `86400.0`。验证看行为：重建前认领的 op 越过
+3600s 仍是 `processing`，日志里 `wall-clock limit` 为 0 条。代价是防卡死兜底从 1 小时变成 24
+小时——真卡死的 op 会占着槽位更久，所以只在回灌期开。
+
+**慢在提炼，不在嵌入**：每个完成的 op 有一行 `[retain-timing]`，`wall=` 是总耗时、`embed=`
+是本地嵌入耗时，实测 2010s/47s、3001s/195s、2727s/130s（嵌入占 2–6%）；按 `llm_requests`
+的 scope 汇总，`retain_extract_facts` 约占 LLM 时间 98%，`embedding_document` 约 2%——换更
+快的嵌入模型没有意义。`llm_requests.started_at` 在排队等并发许可之前就落库（14 条请求同一个
+起始秒，而许可只有 2 个），拿它算并发会高估。日志里成片的 `APIStatusError ... HTTP 429
+{"code": "1302"}` 是排队中的首次尝试快速失败触发的供应商限流，默认退避（≤60s）后自动恢复，
+真正的代价是退避完还要重新排队；stage 显示 `...backoff` 或 `...structured.queued` 都是在
+排队，不是卡死。能提速的只有降提炼推理档位或调大全局并发，前者动质量、后者触发限流
+（并发 32 时该供应商直接回 429），均未采纳。
+
+**失败分块补投**：failed 的 retain op 不会自动重试。优先用官方重试端点续跑——
+`POST /v1/default/banks/<bank>/operations/<operation_id>/retry`，返回 200 即从已提交分块续跑，
+不重复提炼（对子 op `retain` 重试，`batch_retain` 外层行保持 `failed` 不用管）；回灌脚本（v3）
+投的直接重跑同一条命令也行——
 `document_id` 固定，已入库的片是空操作（0 token），实际只提炼失败的那片。手工补投：从
 `async_operations.task_payload` 取出该分块正文**连同原 `document_id`** 重新 POST
 （新 op id，文档仍是原来那个；不带 id 或换新 id 都会重复入库，旧 failed 记录留着不影响）：
