@@ -91,11 +91,16 @@ WHERE bank_id='hermes' GROUP BY 1;
 ## 五、防火墙（远程可达性）
 
 ```powershell
-# 管理员：8888/9999 仅放行组网网段（xEdge：100.64.0.0/10）
+# 管理员（裸机模式才需要；Docker 模式下是冗余的，见下）：8888/9999 仅放行组网网段（xEdge：100.64.0.0/10）
 New-NetFirewallRule -DisplayName "Hindsight API (xEdge only)" -Direction Inbound -Protocol TCP -LocalPort 8888 -RemoteAddress 100.64.0.0/10 -Action Allow
 New-NetFirewallRule -DisplayName "Hindsight UI (xEdge only)" -Direction Inbound -Protocol TCP -LocalPort 9999 -RemoteAddress 100.64.0.0/10 -Action Allow
 ```
 Docker 发布端口走宿主端口规则，同规则对容器映射生效。
+**Docker Desktop 模式下这两条端口级放行规则是冗余的**：8888/9999 的监听进程是 Docker 自带的
+`com.docker.backend.exe`，组网流量靠它自带的入站放行规则（见下）放行。中央主机上原有的端口级放行规则
+已作为冗余删除（2026-11-26；只删这一条，按显示名 + 规则 ID 双匹配，防误删同名新规则），删前删后
+实测一致：回环正常、非组网来源仍超时。组网方向未单独复测——放行依据是 Docker 自带规则，它没有改动。
+Docker 模式只需要下面的 Block 规则；两条放行规则留着也不出错，只是不起作用。
 
 **Docker Desktop 下「仅组网可达」并不自动成立**（实测）：Docker Desktop 自带一条
 `com.docker.backend.exe` 的入站放行规则（任意地址，Private/Public 配置文件），它管的是

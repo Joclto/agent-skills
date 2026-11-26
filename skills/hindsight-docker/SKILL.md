@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.5.1
+version: 1.5.2
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
@@ -72,11 +72,13 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
    （settings-store.json: `ProxyHttpMode=manual` + `OverrideProxyHttp/Https`），ghcr 可直连。
 4. **Coding Plan 的 GLM key 必须带 `/api/coding/` 路径**，标准路径报 1113。
 5. **导入前先建库**：transfer/import 的 URL bank 必须已存在（先 retain 一条种子）。
-6. **防火墙**：8888/9999 入站规则按端口生效，对 Docker 发布端口同样有效，限组网网段
-   （xEdge `100.64.0.0/10`）即可。但「仅组网可达」在 Docker Desktop 下**不自动成立**：
-   Docker Desktop 自带 `com.docker.backend.exe` 的任意地址入站放行规则会架空它——实测
-   非组网来源（WSL 网段）也能访问 8888，而 API 无鉴权。要收紧须另加 Block 规则
-   （已在中央主机落地并三向验证通过：回环正常、成员机可访问、WSL 来源超时），见 deploy-guide 第五节。
+6. **防火墙**：裸机模式靠端口级放行规则把 8888/9999 限在组网网段（xEdge `100.64.0.0/10`）。Docker Desktop
+   模式下这两条放行规则是冗余的（监听进程是 Docker 自带的 `com.docker.backend.exe`，由它自带的任意地址
+   入站放行规则放行），而「仅组网可达」**不自动成立**：实测非组网来源（WSL 网段）也能访问 8888，
+   而 API 无鉴权。Docker 模式的正确形态 = 不建端口级放行规则 + 两条 Block 规则（已在中央主机落地并
+   三向验证通过：回环正常、成员机可访问、WSL 来源超时；原有的端口级放行规则 2026-11-26 删除，
+   删前删后非组网对照一致），见 deploy-guide 第五节。判断「某条规则还要不要」是独立问题：读实时规则表
+   加监听进程归属，别按规则名或历史推断。
 7. **整合队列停滞（思考模型 × 单次超时）**：`/health` 全绿但 pending 不动、日志刷
    `Connection error (HTTP None)`——GLM 强制思考默认 max 档，重的整合调用超过 120s
    单次尝试上限。保 max 的终案是思考时间不设上限：
