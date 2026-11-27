@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.5.4
+version: 1.5.5
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
@@ -45,10 +45,12 @@ metadata:
 
 - 裸机/旧库 → Docker：官方 transfer/export → import（merge），免费零 LLM token，
   全量记忆自动用新嵌入模型重嵌入。见 `references/migration-backfill.md`。
-- 多设备历史会话一次性回灌：`assets/feed_sessions.py`（v3）在每台设备上运行一次，
+- 多设备历史会话一次性回灌：`assets/feed_sessions.py`（v3.1）在每台设备上运行一次，
   把该机 Hermes 的完整对话历史（state.db）投喂进中央库，服务端后台慢慢提炼。
   每片带固定 `document_id`，重跑零新增；**已在实时镜像的机器必须加 `--before`
   <接入时刻，精确到分>**，否则接入之后的会话镜像、回灌各进一份。
+  **定时任务（cron）与子代理（subagent）会话不回灌**，与插件实时镜像同一口径（`--exclude-sources` 可改）；
+  插件「卸载又装回」留下的空窗期用 `--after <空窗起点>` 单独补投。
 
 ## 运维速查
 

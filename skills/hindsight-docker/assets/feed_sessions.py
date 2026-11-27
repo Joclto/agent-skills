@@ -1,13 +1,22 @@
 # -*- coding: utf-8 -*-
 r"""
-feed_sessions.py v3 — 把本机 Hermes 会话历史(state.db)回灌给中央 Hindsight 记忆库
+feed_sessions.py v3.1 — 把本机 Hermes 会话历史(state.db)回灌给中央 Hindsight 记忆库
 
 用法（在【要回灌的那台机器】上运行，API 指向中央服务）:
     python feed_sessions.py http://<host xEdge IP>:8888 --dry-run              # 只打印计划，不发请求
     python feed_sessions.py http://<host xEdge IP>:8888                       # 投喂
     python feed_sessions.py http://<host xEdge IP>:8888 --before 2026-11-23   # 只投 11-23 之前的历史
+    python feed_sessions.py http://<host xEdge IP>:8888 --after 2026-11-25T10:00   # 只投该时刻之后：补插件空窗期
 没有系统 python 时用 Hermes 自带的：%LOCALAPPDATA%\hermes\tools\python*\python.exe
 仅标准库；state.db 以只读方式打开，Hermes 运行中也可以跑。
+
+相对 v3 的变化（v3.1）：
+  1. 按来源排除会话：cron、subagent 整段不投，与 Hindsight 插件实时镜像同口径——定时任务默认不入库
+     （retain_cron 默认关），子代理会话从不入库。旧版 Hermes 的库没有 sessions.source 列时不排除，
+     行为与 v3 一致。
+  2. --after YYYY-MM-DD 或 YYYY-MM-DDTHH:MM：只投该时刻之后的消息。插件每轮只发当轮新内容、
+     不补历史，「卸载又装回」留下的空窗期用它标出起点单独补投。
+  3. --exclude-sources 可改排除名单（逗号分隔），传空串 "" 表示不排除任何来源。
 
 相对 v2 的变化：
   1. 长会话按 8 万字在消息边界分片，各片是独立文档。v2 整篇截到 8 万字，长会话只进了开头。
@@ -25,7 +34,8 @@ feed_sessions.py v3 — 把本机 Hermes 会话历史(state.db)回灌给中央 H
        - 只填到天：接入当天零点到接入时刻之间既没回灌也没镜像，会丢掉这段。
 
 投喂内容：user/assistant 正文。滤掉压缩摘要（三种包装）、后台进程结束通知、失败轮的套话；
-用户中途插话（被 [OUT-OF-BAND] 标记包裹）去掉包装、保留原话。
+用户中途插话（被 [OUT-OF-BAND] 标记包裹）去掉包装、保留原话；
+定时任务（cron）与子代理（subagent）会话整段不投，与 Hindsight 插件实时镜像同一口径。
 """
 import argparse
 import collections
@@ -50,6 +60,7 @@ SUMMARY_HEAD = '[CONTEXT COMPACTION'                              # 压缩摘要
 SUMMARY_WRAP = '[PRIOR CONTEXT — for reference only; not a new message]'     # 摘要的另一种包装头
 SUMMARY_MARK = '\n[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]'        # 真实回复后面接摘要的位置
 OOB_HEAD, OOB_TAIL = '[OUT-OF-BAND USER MESSAGE', '[/OUT-OF-BAND USER MESSAGE]'
+DEFAULT_EXCLUDE_SOURCES = ('cron', 'subagent')   # 与 Hindsight 插件实时镜像同口径：定时任务默认不入库（retain_cron 默认关），子代理会话从不入库
 
 
 def db_path():
@@ -98,8 +109,12 @@ def _keep(content, kind, stat):
     return c
 
 
-def load_sessions(p, before_epoch=None):
-    """-> ({session_id: [(role, content, ts), ...]}, 消息统计)。只含 user/assistant 正文，按写入顺序。"""
+def load_sessions(p, before_epoch=None, exclude_sources=DEFAULT_EXCLUDE_SOURCES, after_epoch=None, meta=None):
+    """-> ({session_id: [(role, content, ts), ...]}, 消息统计)。只含 user/assistant 正文，按写入顺序。
+
+    判断顺序：先按来源排除会话（与插件实时镜像同口径），再 after（起始下界），再 before（截止上界）。
+    meta 传 dict 时填写被来源规则排除的会话数与消息数（meta['excluded_sessions'] / meta['excluded_messages']）。
+    """
     if not os.path.exists(p):
         raise SystemExit(f'未找到 state.db: {p}')
     stat = collections.Counter()
@@ -108,18 +123,41 @@ def load_sessions(p, before_epoch=None):
     kind_col = 'display_kind' if 'display_kind' in cols else 'NULL'   # 旧版 Hermes 没有这一列
     rows = con.execute(f'SELECT session_id, role, content, timestamp, {kind_col} FROM messages '
                        "WHERE role IN ('user','assistant') ORDER BY id").fetchall()
+    excluded = {}
+    scols = {r[1] for r in con.execute('PRAGMA table_info(sessions)')}   # 旧版 Hermes 没有 sessions 表或 source 列：不排除
+    if exclude_sources and 'source' in scols:
+        want = {s.strip().lower() for s in exclude_sources if s and s.strip()}
+        excluded = {sid: (src or '').strip().lower() for sid, src in con.execute('SELECT id, source FROM sessions')}
+        excluded = {sid: src for sid, src in excluded.items() if src in want}
     con.close()
     sess = {}
+    ex_msg = 0
+    ex_cnt, ex_seen = collections.Counter(), set()
     for sid, role, content, ts, kind in rows:
-        if before_epoch is not None:
+        src = excluded.get(sid)
+        if src is not None:
+            ex_msg += 1
+            if sid not in ex_seen:
+                ex_seen.add(sid)
+                ex_cnt[src] += 1
+            continue
+        if after_epoch is not None or before_epoch is not None:
             ep = _epoch(ts)
-            if ep is not None and ep >= before_epoch:
+            if after_epoch is not None and ep is not None and ep < after_epoch:
+                stat['起始时刻之前（不在补投范围内）'] += 1
+                continue
+            if before_epoch is not None and ep is not None and ep >= before_epoch:
                 stat['截止日期之后（由实时镜像负责）'] += 1
                 continue
         c = _keep(content, kind, stat)
         if c is not None:
             sess.setdefault(sid or 'nosession', []).append((role, c, ts))
+    if ex_msg:
+        stat['来源不投（与实时镜像同口径）'] = ex_msg
     stat['保留'] = sum(len(v) for v in sess.values())
+    if meta is not None:
+        meta['excluded_sessions'] = dict(ex_cnt)
+        meta['excluded_messages'] = ex_msg
     return sess, stat
 
 
@@ -192,6 +230,12 @@ def main():
     ap.add_argument('--before', default=None, metavar='YYYY-MM-DD[T]HH:MM',
                     help='只投该时刻之前的消息：YYYY-MM-DD 表示当天零点，也可以精确到分。'
                          '已接入实时镜像的机器填它在中央库出现第一条记忆的时刻')
+    ap.add_argument('--after', default=None, metavar='YYYY-MM-DD[T]HH:MM',
+                    help='只投该时刻之后的消息：YYYY-MM-DD 表示当天零点，也可以精确到分。'
+                         '补投插件「卸载又装回」留下的空窗期时，填装回的时刻')
+    ap.add_argument('--exclude-sources', default=','.join(DEFAULT_EXCLUDE_SOURCES), metavar='LIST',
+                    help='不投这些来源的会话（与插件实时镜像同口径）：逗号分隔，默认 %s，传空串 "" 不排除任何来源'
+                         % ','.join(DEFAULT_EXCLUDE_SOURCES))
     ap.add_argument('--dry-run', action='store_true', help='只打印投喂计划，不发请求')
     args = ap.parse_args()
     api = args.api.rstrip('/')
@@ -202,12 +246,27 @@ def main():
             before_epoch = datetime.fromisoformat(args.before).timestamp()   # YYYY-MM-DD 或 YYYY-MM-DDTHH:MM，按本机时区
         except ValueError:
             ap.error('--before 格式应为 YYYY-MM-DD 或 YYYY-MM-DDTHH:MM')
+    after_epoch = None
+    if args.after:
+        try:
+            after_epoch = datetime.fromisoformat(args.after).timestamp()
+        except ValueError:
+            ap.error('--after 格式应为 YYYY-MM-DD 或 YYYY-MM-DDTHH:MM')
+    excl = tuple(s.strip().lower() for s in args.exclude_sources.split(',') if s.strip())
 
-    sess, stat = load_sessions(str(Path(args.db or db_path()).resolve()), before_epoch)
+    meta = {}
+    sess, stat = load_sessions(str(Path(args.db or db_path()).resolve()), before_epoch, excl, after_epoch, meta)
     items, skipped = plan_items(sess, args.host)
     total_chars = sum(len(t) for _, _, t, _ in items)
-    print(f'源机器 {args.host}：{len(sess)} 个会话，切成 {len(items)} 片，共 {total_chars} 字；'
-          f'消息不足跳过 {skipped} 个会话' + (f'；只投 {args.before} 之前的历史' if args.before else ''))
+    line = (f'源机器 {args.host}：{len(sess)} 个会话，切成 {len(items)} 片，共 {total_chars} 字；'
+            f'消息不足跳过 {skipped} 个会话' + (f'；只投 {args.before} 之前的历史' if args.before else ''))
+    exc = meta.get('excluded_sessions') or {}
+    if exc:
+        present = [s for s in excl if s in exc] or sorted(exc)
+        line += f'；不投 {",".join(present)} 会话 {sum(exc.values())} 个（{meta["excluded_messages"]} 条消息）'
+    if args.after:
+        line += f'；只投 {args.after} 之后的历史'
+    print(line)
     print('消息：' + '，'.join(f'{k} {v}' for k, v in stat.most_common()))
     for doc_id, context, text, _ in items:
         print(f'  {doc_id}（{len(text)} 字）')

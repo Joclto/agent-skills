@@ -23,7 +23,7 @@
 注意：merge 后节点数可能略多于旧库（导入重新提取 + 种子），属正常。
 回滚保险：zip 保留 ≥1 周再清。
 
-## B. 多设备历史会话回灌（feed_sessions.py v3）
+## B. 多设备历史会话回灌（feed_sessions.py v3.1）
 
 把每台设备上 Hermes 的**完整对话历史**一次性投喂进中央库——比插件在会话里 retain 的摘要细得多，
 等于给记忆库补全"过程记忆"。
@@ -32,6 +32,10 @@
 无需装包），Hermes 开着关着都能跑；只保留 user/assistant 正文，单条截 3000 字，
 长会话按 8 万字在消息边界分片（v2 是整篇截到 8 万字，一台机器的历史只进了 34.5%）。
 滤掉压缩摘要、后台进程结束通知、失败轮套话和空消息；用户中途插话去包装后原话保留。
+**定时任务（cron）与子代理（subagent）会话整段不投**（v3.1 起，`--exclude-sources` 可改），
+与插件实时镜像同一口径：定时任务默认不入库（`retain_cron` 默认关），子代理会话从不入库；
+旧版 Hermes 的库没有 `sessions.source` 列时不排除。插件「卸载又装回」留下的空窗期
+（实时镜像不补历史）用 `--after <空窗起点>` 单独补投。
 
 ### 去重语义（决定命令怎么写，先读）
 
@@ -69,7 +73,8 @@ python feed_sessions.py http://<host xEdge IP>:8888             # 正式投喂
 
   每行是一台机器（Windows 账户 SID 的末 8 位；SID 为空的那行是旧库迁入的记忆，忽略）。对端 PowerShell 里执行
   `[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value`，末 8 位对得上就是它，
-  例如：`python feed_sessions.py http://<host xEdge IP>:8888 --before 2026-11-23T09:48`
+  例如：`python feed_sessions.py http://<host xEdge IP>:8888 --before 2026-11-23T09:48`。
+  已接入设备的镜像起点（2026-11-28 库内记录，单文件启动器已内置名单）：`2026-11-23T09:48`、`2026-11-23T09:56`
 - 投喂是 `async=true`：立即入队，服务端后台慢慢提炼（GLM 提取 + 嵌入），进度看官方 UI「操作」页。
   速度参考：一次实测回灌 26.7 万字，服务端累计提炼约 240 分钟（约 1100 字/分钟，多片并行时墙钟更短），
   百万字级历史按十几个小时估。
