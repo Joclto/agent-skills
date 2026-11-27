@@ -55,6 +55,8 @@ services:
       - "9999:9999"
     environment:
       # LLM（国内智谱端点，Coding key 必须带 /api/coding/）
+      # 也可改走宿主机上的 OpenAI 兼容网关：BASE_URL 换成 http://host.docker.internal:<端口>/v1
+      # （先把网关的「非流式响应超时」调到 3600s，否则约三成长整合调用会被掐断；见 deploy-guide）
       HINDSIGHT_API_LLM_PROVIDER: zai
       HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:?set in .env}
       HINDSIGHT_API_LLM_MODEL: glm-5.3-flash

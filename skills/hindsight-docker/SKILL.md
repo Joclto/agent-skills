@@ -1,7 +1,7 @@
 ---
 name: hindsight-docker
 description: Deploy and operate a centralized Hindsight memory bank with Docker Desktop (vchord variant, full-dimension embeddings, multi-device session backfill).
-version: 1.5.3
+version: 1.5.4
 author: "刘飞天 (Joclto), Hermes Agent"
 license: MIT
 platforms: [windows]
@@ -106,3 +106,9 @@ docker compose pull; docker compose up -d                 # 更新（API+UI+DB �
     或换个 id 再投就是第二份（临时库实测 +41 单元，文档 1→2），整合层 0.97 的语义去重只是兜底。
     回灌必须带稳定 id，同一台机器不与 v2 混跑；去重类结论一律在临时库里验证
     （`assert BANK != 'hermes'`，跑完删库）。见 `references/migration-backfill.md` §B。
+12. **LLM 改走网关/反代前，先调大它的非流式超时**：Hindsight 全部是非流式调用（没有流式路径），而网关普遍
+    对非流式响应设固定超时（实测的那款默认 300s，302s 处返回 502）。按约 70 tok/s 折算，中央主机 32% 的整合调用
+    单次生成超过 300s（retain 全部在 300s 内）——轻量探针和小于 300s 的批次都会通过，根本暴露不出来。把网关的
+    「非流式响应超时」和「流空闲超时」调到 3600s 再切（调后 294/531/829s 的调用均完整返回）。可行性按顺序实测：
+    Hindsight 自己的客户端类跑三种形态 → 生产同形探针跑真实事实 → 故意一次 5 分钟以上的重批次；另查网关里
+    该模型所属账号的状态。详见 `references/deploy-guide.md`「LLM 端点走宿主机网关」。
