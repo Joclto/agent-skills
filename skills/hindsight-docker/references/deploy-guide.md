@@ -276,6 +276,8 @@ UPDATE memory_units SET consolidation_failed_at = NULL, consolidated_at = NULL
 - 实测：此前在 120s 下重试耗尽而失败的两个分块（3012 / 10806 token），放开后重新投喂
   94s / 265s 完成。
 
+**思考强度（2026-11-28 补充）**：未设置 `HINDSIGHT_API_LLM_REASONING_EFFORT`（及各操作变量）时，Hindsight 不发送任何推理参数，各模型按自己的默认强度运行；经多账号轮询的网关时，各账号的默认思考量并不一致（实测部分账号输出 token 仅 1–2 千、耗时 24–33 秒，另一些 1–1.3 万、170–220 秒）。需要一致就显式钉住，改动需重建容器；启动日志每个客户端一行 `reasoning_effort=<值|not sent>` 可核对。
+
 **回灌期间的墙钟（2026-11-26 改判）**：全局 LLM 并发（`HINDSIGHT_API_LLM_MAX_CONCURRENT`，模板默认 2；直连供应商保持 2，网关轮询多账号时按账号数分步上调——实测 4 时拒绝率 7%、6 时六个并发位全满）
 由 retain、整理、反思共用，worker 槽位数不是 LLM 并行度——8 个 op 同时 `processing`，真正
 在发的请求只有并发上限那么多路（实测时为 2）。单片要发多次提炼调用（实测平均 4 次、最多 7 次），而且是**一起发出**排队，不是发完一个再发下一个：

@@ -66,6 +66,10 @@ services:
       # account, stepped up while watching the rejection share (measured: 4 -> 7% rejections,
       # 6 -> all six in flight). A container recreate is needed for a change to take effect.
       HINDSIGHT_API_LLM_MAX_CONCURRENT: "2"
+      # Reasoning effort: unset = NO reasoning parameter is sent, so each model/provider runs at its
+      # own default. Behind a gateway that rotates over several accounts, pin a value so every account
+      # runs at the same effort (unset, some accounts barely think while others spend 10x the tokens).
+      # HINDSIGHT_API_LLM_REASONING_EFFORT: "max"
       # Thinking models (GLM-5.x): consolidation at effort=max thinks MINUTES per call
       # (a single dense-cluster fact measured 238s; one 8-fact batch 546s) — any finite
       # per-attempt timeout kills legitimate long thinking. 24h = effectively unbounded;
