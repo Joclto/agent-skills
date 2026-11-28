@@ -61,6 +61,10 @@ services:
       HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:?set in .env}
       HINDSIGHT_API_LLM_MODEL: glm-5.3-flash
       HINDSIGHT_API_LLM_BASE_URL: https://open.bigmodel.cn/api/coding/paas/v4
+      # LLM permits shared by retain / consolidation / reflect. Direct provider: keep 2 (32 drew 429s).
+      # Behind a gateway that round-robins over several accounts: about one permit per serving
+      # account, stepped up while watching the rejection share (measured: 4 -> 7% rejections,
+      # 6 -> all six in flight). A container recreate is needed for a change to take effect.
       HINDSIGHT_API_LLM_MAX_CONCURRENT: "2"
       # Thinking models (GLM-5.x): consolidation at effort=max thinks MINUTES per call
       # (a single dense-cluster fact measured 238s; one 8-fact batch 546s) — any finite
